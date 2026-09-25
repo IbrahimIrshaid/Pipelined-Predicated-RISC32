@@ -43,11 +43,10 @@ module dmem(
 
     always_ff @(posedge clk) begin
         if (MemWr) begin
-            b = address << 2;
-            RAM[b+0] <= DataIn[7:0];
-            RAM[b+1] <= DataIn[15:8];
-            RAM[b+2] <= DataIn[23:16];
-            RAM[b+3] <= DataIn[31:24];
+            RAM[(address << 2) + 0] <= DataIn[7:0];
+            RAM[(address << 2) + 1] <= DataIn[15:8];
+            RAM[(address << 2) + 2] <= DataIn[23:16];
+            RAM[(address << 2) + 3] <= DataIn[31:24];
         end
     end
 endmodule

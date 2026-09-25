@@ -54,17 +54,12 @@ module regfile32(
         rf[0] <= 32'h0;
     end
 
-    function [31:0] rdata(input [4:0] ra);
-        begin
-            if (ra == 5'd0)       rdata = 32'h0;
-            else if (ra == 5'd30) rdata = pc_value;
-            else                  rdata = rf[ra];
-        end
-    endfunction
-
-    assign rd1 = rdata(ra1);
-    assign rd2 = rdata(ra2);
-    assign rd3 = rdata(ra3);
+    // Reads are plain continuous expressions (not a function call) so they stay
+    // sensitive to rf[], we/wa/wd and pc_value, not just to the read address.
+    // A register being written back this cycle is bypassed straight to the read port.
+    assign rd1 = (ra1 == 5'd0) ? 32'h0 : (ra1 == 5'd30) ? pc_value : (we && ra1 == wa) ? wd : rf[ra1];
+    assign rd2 = (ra2 == 5'd0) ? 32'h0 : (ra2 == 5'd30) ? pc_value : (we && ra2 == wa) ? wd : rf[ra2];
+    assign rd3 = (ra3 == 5'd0) ? 32'h0 : (ra3 == 5'd30) ? pc_value : (we && ra3 == wa) ? wd : rf[ra3];
 endmodule
 
 module signext12(input [11:0] imm, output [31:0] y);

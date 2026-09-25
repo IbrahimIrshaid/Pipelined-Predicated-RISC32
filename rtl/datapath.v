@@ -111,8 +111,6 @@ module datapath(
         .rd3(RDp_raw)
     );
 
-    // predicate: execute if (Rp == R0) OR (Reg[Rp] != 0)
-    wire pred_trueD = (RpD == 5'd0) ? 1'b1 : (RDp_raw != 32'h0);
 
     // immediate extension
     wire [31:0] imm_sext, imm_zext;
@@ -131,7 +129,8 @@ module datapath(
     // Pipeline regs
     // =========================
     // ID/EX
-    reg        IDEX_pred;
+    reg [4:0]  IDEX_Rp;
+    reg [31:0] IDEX_rp_val;
     reg [4:0]  IDEX_opcode;
     reg        IDEX_regwrite, IDEX_memread, IDEX_memwrite, IDEX_memtoreg, IDEX_alusrc_imm;
     reg [2:0]  IDEX_aluop;
@@ -175,7 +174,8 @@ module datapath(
         ((D_uses_rs && (IDEX_dest == RsD)) ||
          (D_uses_rt && (IDEX_dest == RtD)) ||
          (D_uses_store && (IDEX_dest == RdD)) ||
-         ((opcodeD == `OP_JR) && (IDEX_dest == RsD)));
+         ((opcodeD == `OP_JR) && (IDEX_dest == RsD)) ||
+         ((RpD != 5'd0) && (IDEX_dest == RpD)));
 
     always @(*) begin
         stallF = load_use_hazard;
@@ -185,7 +185,8 @@ module datapath(
 
     always @(posedge clk) begin
         if (reset) begin
-            IDEX_pred       <= 1'b0;
+            IDEX_Rp         <= 5'd0;
+            IDEX_rp_val     <= 32'h0;
             IDEX_opcode     <= 5'd0;
             IDEX_regwrite   <= 1'b0;
             IDEX_memread    <= 1'b0;
@@ -206,9 +207,10 @@ module datapath(
             IDEX_Rs         <= 5'd0;
             IDEX_Rt         <= 5'd0;
             IDEX_Rd_field   <= 5'd0;
-        end else if (load_use_hazard) begin
-            // bubble
-            IDEX_pred       <= 1'b0;
+        end else if (load_use_hazard || ex_take_jump) begin
+            // bubble (load-use stall, or wrong-path instruction behind a taken jump)
+            IDEX_Rp         <= 5'd0;
+            IDEX_rp_val     <= 32'h0;
             IDEX_regwrite   <= 1'b0;
             IDEX_memread    <= 1'b0;
             IDEX_memwrite   <= 1'b0;
@@ -230,7 +232,8 @@ module datapath(
             IDEX_Rt         <= 5'd0;
             IDEX_Rd_field   <= 5'd0;
         end else begin
-            IDEX_pred       <= pred_trueD;
+            IDEX_Rp         <= RpD;
+            IDEX_rp_val     <= RDp_raw;
             IDEX_opcode     <= opcodeD;
             IDEX_regwrite   <= regwriteD;
             IDEX_memread    <= memreadD;
@@ -258,30 +261,31 @@ module datapath(
     // =========================
     // EX stage (forwarding + ALU + jump)
     // =========================
-    reg [31:0] ex_a, ex_b, ex_store;
+    reg [31:0] ex_a, ex_b, ex_store, ex_p;
+    wire fwd_mem = EXMEM_pred && EXMEM_regwrite && !EXMEM_memtoreg && (EXMEM_waddr != 5'd0) && (EXMEM_waddr != 5'd30);
+    wire fwd_wb  = MEMWB_pred && MEMWB_regwrite && (MEMWB_waddr != 5'd0) && (MEMWB_waddr != 5'd30);
     wire [31:0] wb_value = MEMWB_memtoreg ? MEMWB_mem_out : MEMWB_alu_out;
 
     always @(*) begin
         ex_a = IDEX_rs_val;
         ex_b = IDEX_rt_val;
         ex_store = IDEX_store_val;
+        ex_p = IDEX_rp_val;
 
-        // forward from EX/MEM (ALU result)
-        if (EXMEM_regwrite && (EXMEM_waddr != 5'd0) && (EXMEM_waddr != 5'd30) && (EXMEM_waddr == IDEX_Rs))
-            ex_a = EXMEM_alu_out;
-        if (EXMEM_regwrite && (EXMEM_waddr != 5'd0) && (EXMEM_waddr != 5'd30) && (EXMEM_waddr == IDEX_Rt))
-            ex_b = EXMEM_alu_out;
-        if (EXMEM_regwrite && (EXMEM_waddr != 5'd0) && (EXMEM_waddr != 5'd30) && (EXMEM_waddr == IDEX_Rd_field))
-            ex_store = EXMEM_alu_out;
+        // forward from MEM/WB first, then EX/MEM, so the most recent producer wins
+        if (fwd_wb && (MEMWB_waddr == IDEX_Rs))       ex_a     = wb_value;
+        if (fwd_wb && (MEMWB_waddr == IDEX_Rt))       ex_b     = wb_value;
+        if (fwd_wb && (MEMWB_waddr == IDEX_Rd_field)) ex_store = wb_value;
+        if (fwd_wb && (MEMWB_waddr == IDEX_Rp))       ex_p     = wb_value;
 
-        // forward from MEM/WB
-        if (MEMWB_regwrite && (MEMWB_waddr != 5'd0) && (MEMWB_waddr != 5'd30) && (MEMWB_waddr == IDEX_Rs))
-            ex_a = wb_value;
-        if (MEMWB_regwrite && (MEMWB_waddr != 5'd0) && (MEMWB_waddr != 5'd30) && (MEMWB_waddr == IDEX_Rt))
-            ex_b = wb_value;
-        if (MEMWB_regwrite && (MEMWB_waddr != 5'd0) && (MEMWB_waddr != 5'd30) && (MEMWB_waddr == IDEX_Rd_field))
-            ex_store = wb_value;
+        if (fwd_mem && (EXMEM_waddr == IDEX_Rs))       ex_a     = EXMEM_alu_out;
+        if (fwd_mem && (EXMEM_waddr == IDEX_Rt))       ex_b     = EXMEM_alu_out;
+        if (fwd_mem && (EXMEM_waddr == IDEX_Rd_field)) ex_store = EXMEM_alu_out;
+        if (fwd_mem && (EXMEM_waddr == IDEX_Rp))       ex_p     = EXMEM_alu_out;
     end
+
+    // predicate: execute if Rp == R0, otherwise if (forwarded) Reg[Rp] != 0
+    wire pred_ex = (IDEX_Rp == 5'd0) ? 1'b1 : (ex_p != 32'h0);
 
     wire [31:0] alu_b_in = IDEX_alusrc_imm ? IDEX_imm_ext : ex_b;
 
@@ -296,7 +300,7 @@ module datapath(
     always @(*) begin
         ex_take_jump  = 1'b0;
         ex_jump_target = 32'h0;
-        if (IDEX_pred && IDEX_is_jump) begin
+        if (pred_ex && IDEX_is_jump) begin
             ex_take_jump  = 1'b1;
             ex_jump_target = IDEX_is_jr ? jump_target_jr : jump_target_off;
         end
@@ -315,13 +319,13 @@ module datapath(
             EXMEM_waddr     <= 5'd0;
             EXMEM_pc_plus1  <= 32'h0;
         end else begin
-            EXMEM_pred      <= IDEX_pred;
+            EXMEM_pred      <= pred_ex;
             EXMEM_regwrite  <= IDEX_regwrite;
             EXMEM_memread   <= IDEX_memread;
             EXMEM_memwrite  <= IDEX_memwrite;
             EXMEM_memtoreg  <= IDEX_memtoreg;
             EXMEM_is_call   <= IDEX_is_call;
-            EXMEM_alu_out   <= alu_result;
+            EXMEM_alu_out   <= IDEX_is_call ? ex_pc_plus1 : alu_result;
             EXMEM_store_val <= ex_store;
             EXMEM_waddr     <= IDEX_is_call ? 5'd31 : IDEX_dest;
             EXMEM_pc_plus1  <= ex_pc_plus1;

@@ -10,12 +10,12 @@
 `define OP_ADDI  5'd5
 `define OP_ORI   5'd6
 `define OP_NORI  5'd7
-`define OP_ANDI  5'd8
-`define OP_LW    5'd9
-`define OP_SW    5'd10
-`define OP_J     5'd11
-`define OP_CALL  5'd12
-`define OP_JR    5'd13
+`define OP_ANDI  5'd9
+`define OP_LW    5'd10
+`define OP_SW    5'd11
+`define OP_J     5'd12
+`define OP_CALL  5'd13
+`define OP_JR    5'd14
 
 // ALU control encodings
 `define ALU_ADD  3'd0

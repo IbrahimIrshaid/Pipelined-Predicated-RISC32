@@ -17,7 +17,7 @@ Usage:
 import sys
 
 def normalize_line(s: str) -> str:
-    s = s.strip().replace(" ", "").replace("_", "")
+    s = s.split("//")[0].strip().replace(" ", "").replace("_", "")
     if s.startswith("0x") or s.startswith("0X"):
         s = s[2:]
     return s
